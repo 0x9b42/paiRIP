@@ -2,7 +2,6 @@
 .super Ljava/lang/Thread;
 
 
-# static fields
 .field private static final PARAMETER_BUFFER:Ljava/lang/ThreadLocal;
 
 .field private static final QUEUE:Ljava/util/concurrent/LinkedBlockingQueue;
@@ -12,7 +11,6 @@
 .field private static final TIME_FORMAT2:Ljava/text/SimpleDateFormat;
 
 
-# direct methods
 .method static constructor <clinit>()V
     .registers 2
 
