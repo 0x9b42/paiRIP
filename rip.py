@@ -41,45 +41,24 @@ class Log:
 
 LOG = Log()
 
-if len(sys.argv) < 2:
-    LOG.e(
-        f'usage: python {sys.argv[0]} {os.path.join(*'path to apk'.split())}'
-    )
-    sys.exit(1)
-
-APK = sys.argv[1]
-
-if not os.path.isfile(APK):
-    LOG.e('no such file:', APK)
-    sys.exit(1)
-
-POS = f'_rip.{os.getpid()}'
-OUT = '.'.join(APK.split('.')[:-1]) + POS + '.apk'
-TMP = os.path.join(tempfile.gettempdir(), POS)
-BES = os.path.join(TMP, 'base.apk')
-SRC = BES + '_src'
-
-
-def is_split(apk):
-    return re.match(r'\.x?apk[sm]?', apk.lower()[-5:])
-
 
 def rmdir(dir):
-    try:
-        shutil.rmtree(dir)
+    LOG.i('[RMDIR]', dir)
+
+    try: shutil.rmtree(dir)
     except Exception as e:
         print(e)
         sys.exit(1)
 
-    LOG.d('deleted successfully:', C.r + dir)
+    LOG.d('removed successfully')
 
 
 def mkdir(dir):
+    LOG.i('[MKDIR]', dir)
     os.makedirs(dir, exist_ok=True)
-    LOG.i('created:', C.b + dir + '/')
 
 
-def nope(q):  # counter-intuitive? why not?
+def nope(q):
     LOG.w(q, end='')
     y = input(' [y/N]: ').strip().lower()
     return False if y in ['y', 'yes'] else True
@@ -88,6 +67,59 @@ def nope(q):  # counter-intuitive? why not?
 def civis(t):
     sys.stdout.write('\x1b[?25' + ('l' if t else 'h'))
     sys.stdout.flush()
+
+
+if len(sys.argv) < 2:
+    LOG.e(f'usage: python {sys.argv[0]} {os.path.join(*'path to apk'.split())}')
+    sys.exit(1)
+
+
+class Apk:
+    LIB = {
+        'pairipcore': False,
+        'il2cpp': False
+    }
+    isIjiami = False
+
+    def __init__(self, path):
+        if not path.endsWith('.apk'):
+            raise Exception(f'{path} is not an APK file')
+
+        self.PATH = path
+        
+        crc = {}
+        for i in self.infolist():
+            crc[i.filename] = i.CRC
+
+            lib = lambda x: re.match(f'lib/.+/lib{x}.so', i.filename)
+
+            for l in self.LIB:
+                if lib(l):
+                    self.LIB[l] = True
+
+        self.CRC = crc
+
+    def infolist(self, path=''):
+        path = path or self.PATH
+        with ZipFile(path) as z:
+            return z.infolist()
+
+    def patch_CRC(self, apk):
+        crc_byte = lambda x: x.to_bytes(4, byteorder='little')
+
+        with open(self.PATH, 'rb') as f:
+            dat = bytearray(f.read())
+
+        for k, v in self.CRC.items():
+
+            if k not in apk.crc: continue
+
+            if v != apk.CRC[k]:
+                m = crc_byte(v)
+                n = crc_byte(apk.CRC[k])
+                dat = dat.replace(m, n)
+
+        return dat
 
 
 class APKEditor:
@@ -120,86 +152,157 @@ class APKEditor:
 
         except Exception as e:
             print(e)
-            sys.exit(1)
+            raise Exception(f'failed to run {C.y + ' '.join(cmd)}')
 
     def merge(self, apks, out):
-        LOG.i('merging split apks...')
+        LOG.i(f'[MERGE] {apks} => {out}')
         self.exec('m', apks, out)
         LOG.d('merged successfully')
 
     def decode(self, apk, out):
-        LOG.i('decompiling apk...')
+        LOG.i(f'[DECODE] {apk} => {out}')
         self.exec('d', apk, out, '-no-dex-debug')
         LOG.d('decompiled successfully')
 
     def build(self, src, out):
-        LOG.i('building source...')
+        LOG.i(f'[BUILD] {src} => {out}')
         self.exec('b', src, out, '-f')
-        LOG.d('built:', C.y + out)
+        LOG.d('built successfully')
 
 
-class ApkUtils:
-    def is_split(self, apk):
-        return re.match(r'\.x?apk[sm]?', apk.lower()[-5:])
+class MobLogger:
+    def __init__(self, src):
+        self.SRC = src
 
-    def getCRCs(self, apk):
-        crc = {}
-        with ZipFile(apk) as z:
-            for i in z.infolist():
-                crc[i.filename] = i.CRC
 
-        return crc
+class Rip:
+    POS = f'rip.{os.getpid()}'
+    TMP = os.path.join(tempfile.gettempdir(), POS)
+    ESP = {  # External Storage Permission
+        'READ': False, 'WRITE': False, 'MANAGE': False
+    }
 
-    def patchCRCs(self, ori, mod):
+    def __init__(self, path):
+        self.PATH = path
+        self.OUT = self.ext_swap(path, '_rip.apk')
+        self.ANU = self.ext_swap(path, '_getlog.apk')
+        self.ORI = os.path.join(
+            self.TMP, os.path.basename(self.OUT)
+        )
+        self.SRC = self.ORI + '_src'
+        self.AMX = os.path.join(self.SRC, 'AndroidManifest.xml')
+
+    def fuck(self):
+        J = APKEditor()
+
+        LOG.i('creating temporary folder...')
+        mkdir(self.TMP)
+
+        if self.is_split():
+            LOG.w('split apk detected')
+            J.merge(self.PATH, self.ORI)
+
+        else:
+            shutil.copy(self.PATH, self.ORI)
+
+        J.decode(self.ORI, self.SRC)
+
+        #self.manifest_patch()
+        self.inject_logger()
+        self.bypass_checks()
+
+        if os.path.isfile(self.OUT):
+            LOG.w('file exists:', C.y + self.OUT)
+
+            if nope('overwrite it?'):
+                LOG.w('operation aborted. cleaning up...')
+                rmdir(self.TMP)
+                sys.exit(1)
+
+        J.build(self.SRC, self.OUT)
+
+        self.patch_crc()
+        self.pairip_fuck()
+
+        LOG.i('operation finished, cleaning up...')
+        rmdir(self.TMP)
+
+    def ext_swap(self, path, ext, o='.'):
+        return o.join(path.split(o)[:-1] + [ext])
+
+    def is_split(self, path=''):
+        path = path or self.PATH
+        return re.match(r'\.x?apk[sm]?', path.lower()[-5:])
+
+    def manifest_patch(self):
+        uses = '<uses-permission android:name="{}"/>'
+        name = 'android.permission.{}_EXTERNAL_STORAGE"'
+        tag = '</manifest>'
+
+        with open(self.AMX, 'r') as f:
+            mnf = f.read()
+
+        for i in self.ESP:
+            x = name.format(i)
+            m = re.search(x, mnf)
+
+            if m: self.ESP[i] = True
+
+            else:
+                y = uses.format(x) + '\n' + tag
+                mnf = re.sub(tag, y, mnf)
+                LOG.d('added permission:', x)
+
+        with open(self.AMX, 'w') as f:
+            f.write(mnf)
+
+    def inject_logger(self):
         pass
 
+    def bypass_checks(self):
+        pass
 
+    def patch_crc(self):
+        crc_byte = lambda x: x.to_bytes(4, byteorder='little')
 
-J = APKEditor()
+        ori = Apk(self.ORI)
+        mod = Apk(self.ANU)
 
+        with open(mod.PATH, 'rb') as f:
+            dat = bytearray(f.read())
+
+        for file, mod_crc in mod.CRC.items():
+
+            if file not in ori.CRC: continue
+
+            if mod_crc != ori.CRC[file]:
+                m = crc_byte(mod_crc)
+                n = crc_byte(ori.CRC[file])
+                dat = dat.replace(m, n)
+
+                LOG.d(f'[PATCHED] {os.path.basename(file)} ({m} => {n})')
+
+        with open(self.ANU, 'wb') as f:
+            f.write(dat)
+
+    def pairip_fuck(self):
+        mtd = input('generated mtd file path: ')
+        return mtd
+
+banner = '''
+#######################
+ pairip removal script
+#######################
+'''
 if __name__ == '__main__':
-    LOG.i('creating temporary folder...')
-    mkdir(TMP)
+    print(banner)
+    APK = sys.argv[1]
+    rip = Rip(APK)
 
-    if is_split(APK):
-        LOG.w('split apk detected')
-        J.merge(APK, BES)
-        APK = APK[:-5]
+    try: rip.fuck()
 
-    else:
-        shutil.copy(APK, BES)
-        APK = APK[:-4]
-
-    # add logger dex from ./assets to apk
-    #shutil.copy('assets/classes0.dex', '')
-
-    # decompile apk
-    J.decode(BES, SRC)
-
-    # modify manifest to add storage permission
-    #patch_manifest()
-
-    # add logger invokes to smali to log pairip strings
-    #inject_logger()
-
-    # build modified source, user then run the app to get .mtd
-    if os.path.isfile(OUT):
-        LOG.w('file exists:', C.y + OUT)
-
-        if nope('overwrite it?'):
-
-            LOG.w('operarion aborted. cleaning up...')
-            rmdir(TMP)
-
-            sys.exit(1)
-
-    J.build(SRC, OUT)
-
-    # take .mtd file from user to further restore pairip strings
-    #input('mtd file: ')
-
-    # 
-
-    # clean up
-    LOG.i('deleting temporary folder...')
-    rmdir(TMP)
+    except Exception as e:
+        LOG.e(e)
+        LOG.w('cleaning up...')
+        rmdir(rip.TMP)
+        raise
