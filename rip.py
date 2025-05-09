@@ -43,18 +43,18 @@ LOG = Log()
 
 
 def rmdir(dir):
-    LOG.i('[RMDIR]', dir)
+    LOG.i('rmdir', dir)
 
     try: shutil.rmtree(dir)
     except Exception as e:
         print(e)
         sys.exit(1)
 
-    LOG.d('removed successfully')
+    LOG.d('deleted:', dir)
 
 
 def mkdir(dir):
-    LOG.i('[MKDIR]', dir)
+    LOG.i('mkdir', dir)
     os.makedirs(dir, exist_ok=True)
 
 
@@ -75,51 +75,37 @@ if len(sys.argv) < 2:
 
 
 class Apk:
-    LIB = {
-        'pairipcore': False,
-        'il2cpp': False
-    }
+    isPairip = False
+    isUnity = False
     isIjiami = False
 
     def __init__(self, path):
-        if not path.endsWith('.apk'):
-            raise Exception(f'{path} is not an APK file')
+        if not path.endswith('.apk'):
+            raise Exception(f'{path} bukan format APK')
 
         self.PATH = path
+        self.DATA = self.data()
         
         crc = {}
-        for i in self.infolist():
+        for i in self.DATA.infolist():
             crc[i.filename] = i.CRC
 
             lib = lambda x: re.match(f'lib/.+/lib{x}.so', i.filename)
 
-            for l in self.LIB:
-                if lib(l):
-                    self.LIB[l] = True
+            if lib('pairipcore'): self.isPairip = True
+            if lib('il2cpp'): self.isUnity = True
 
         self.CRC = crc
+
+    def data(self, path=''):
+        path = path or self.PATH
+        with ZipFile(self.PATH, 'r') as z:
+            return z
 
     def infolist(self, path=''):
         path = path or self.PATH
         with ZipFile(path) as z:
             return z.infolist()
-
-    def patch_CRC(self, apk):
-        crc_byte = lambda x: x.to_bytes(4, byteorder='little')
-
-        with open(self.PATH, 'rb') as f:
-            dat = bytearray(f.read())
-
-        for k, v in self.CRC.items():
-
-            if k not in apk.crc: continue
-
-            if v != apk.CRC[k]:
-                m = crc_byte(v)
-                n = crc_byte(apk.CRC[k])
-                dat = dat.replace(m, n)
-
-        return dat
 
 
 class APKEditor:
@@ -130,17 +116,18 @@ class APKEditor:
 
         if not os.path.isfile(self.jar):
             mkdir('assets')
-            LOG.i('downloading required jar file ...')
+            LOG.i('mengunduh APKEditor.jar...')
             urllib.request.urlretrieve(self.url, self.jar)
-            LOG.i('saved to:', self.jar)
+            LOG.i('disimpan ke:', self.jar)
 
         if not shutil.which('java'):
-            LOG.e('java executable not found')
-            LOG.i('jdk needed to run', self.jar)
+            LOG.e('java tidak ditemukan')
+            LOG.i('jdk dibutuhkan untuk menjalankan APKEditor', self.jar)
             sys.exit(1)
 
     def exec(self, c, i, o, *opts):
         cmd = ['java', '-jar', self.jar, c, '-i', i, '-o', o] + list(opts)
+        LOG.log(C.y + 'APKEditor', c.upper(), f'{i} => {o}')
 
         try:
             subprocess.run(
@@ -155,47 +142,73 @@ class APKEditor:
             raise Exception(f'failed to run {C.y + ' '.join(cmd)}')
 
     def merge(self, apks, out):
-        LOG.i(f'[MERGE] {apks} => {out}')
-        self.exec('m', apks, out)
-        LOG.d('merged successfully')
+        self.exec('merge', apks, out)
+        LOG.d('konversi berhasil:', out)
 
     def decode(self, apk, out):
-        LOG.i(f'[DECODE] {apk} => {out}')
-        self.exec('d', apk, out, '-no-dex-debug')
-        LOG.d('decompiled successfully')
+        self.exec('decode', apk, out, '-no-dex-debug')
+        LOG.d('dekompilasi berhasil:', out)
 
     def build(self, src, out):
-        LOG.i(f'[BUILD] {src} => {out}')
-        self.exec('b', src, out, '-f')
-        LOG.d('built successfully')
+
+        if os.path.isfile(out):
+            LOG.w('file ditemukan:', out)
+
+            if nope('timpa file?'):
+                raise Exception('operasi dibatalkan oleh user')
+
+        self.exec('build', src, out, '-f')
+        LOG.d('kompilasi berhasil:', out)
 
 
-class MobLogger:
-    def __init__(self, src):
-        self.SRC = src
+class Smali:
+    def __init__(self, path):
+        with open(path, 'r') as f:
+            d = f.read()
+
+        self.path = path
+        self.content = d
+        self.klas = re.search('.class.+ (L.+)', d).group(1)
+        self.zuper = re.search('.super (.+)', d).group(1)
+
+    def replace(self, pat, rep):
+        self.content = re.sub(pat, rep, self.content)
+
+    def append(self, dat):
+        self.content = self.content + dat
+
+    def write(self):
+        with open(self.path,'w') as f:
+            f.write(self.content)
 
 
 class Rip:
     POS = f'rip.{os.getpid()}'
     TMP = os.path.join(tempfile.gettempdir(), POS)
-    ESP = {  # External Storage Permission
-        'READ': False, 'WRITE': False, 'MANAGE': False
-    }
 
     def __init__(self, path):
         self.PATH = path
-        self.OUT = self.ext_swap(path, '_rip.apk')
-        self.ANU = self.ext_swap(path, '_getlog.apk')
-        self.ORI = os.path.join(
-            self.TMP, os.path.basename(self.OUT)
-        )
-        self.SRC = self.ORI + '_src'
+        swp = lambda x, y: (x[:-5] if self.is_split() else x[:-4]) + y
+        self.ANU = swp(path, '_log.apk')
+        self.OUT = swp(path, '_rip.apk')
+        self.ORI = os.path.join(self.TMP, os.path.basename(self.OUT))
+        self.SRC = swp(self.ORI, '_src')
         self.AMX = os.path.join(self.SRC, 'AndroidManifest.xml')
+        self.COM = os.path.join('com', 'pairip')
+
+    def sfiles(self):
+        p = os.path.join(self.SRC, 'smali')
+        
+        sml = []
+        for r,_,f in os.walk(p):
+            sml = sml + [os.path.join(r, i) for i in f]
+
+        return sml
 
     def fuck(self):
         J = APKEditor()
 
-        LOG.i('creating temporary folder...')
+        LOG.i('membuat folder dapur...')
         mkdir(self.TMP)
 
         if self.is_split():
@@ -205,30 +218,24 @@ class Rip:
         else:
             shutil.copy(self.PATH, self.ORI)
 
+        LOG.i('dekompilasi APK...')
         J.decode(self.ORI, self.SRC)
 
-        #self.manifest_patch()
+        self.manifest_patch()
         self.inject_logger()
         self.bypass_checks()
 
-        if os.path.isfile(self.OUT):
-            LOG.w('file exists:', C.y + self.OUT)
-
-            if nope('overwrite it?'):
-                LOG.w('operation aborted. cleaning up...')
-                rmdir(self.TMP)
-                sys.exit(1)
-
-        J.build(self.SRC, self.OUT)
+        LOG.i('kompilasi sumber termodifikasi...')
+        J.build(self.SRC, self.SRC + '.apk')
 
         self.patch_crc()
         self.pairip_fuck()
 
-        LOG.i('operation finished, cleaning up...')
-        rmdir(self.TMP)
+        LOG.i('kompilasi APK tanpa pairip...')
+        J.build(self.SRC, self.OUT)
 
-    def ext_swap(self, path, ext, o='.'):
-        return o.join(path.split(o)[:-1] + [ext])
+        LOG.i('operasi selesai. menghapus sisa dapur...')
+        rmdir(self.TMP)
 
     def is_split(self, path=''):
         path = path or self.PATH
@@ -236,64 +243,225 @@ class Rip:
 
     def manifest_patch(self):
         uses = '<uses-permission android:name="{}"/>'
-        name = 'android.permission.{}_EXTERNAL_STORAGE"'
+        name = 'android.permission.{}_EXTERNAL_STORAGE'
+        perm = ['READ', 'WRITE', 'MANAGE']
         tag = '</manifest>'
+        
+        LOG.i('memodifikasi manifes...')
+        shutil.copy(self.AMX, self.AMX + '.bak')
 
         with open(self.AMX, 'r') as f:
             mnf = f.read()
 
-        for i in self.ESP:
+        for i in perm:
             x = name.format(i)
             m = re.search(x, mnf)
 
-            if m: self.ESP[i] = True
+            if m:
+                LOG.i('ijin ditemukan:', x)
 
             else:
                 y = uses.format(x) + '\n' + tag
                 mnf = re.sub(tag, y, mnf)
-                LOG.d('added permission:', x)
+                LOG.d('ijin ditambahkan:', x)
+
+        a = '<application'
+        p = 'android:requestLegacyExternalStorage'
+        mnf = re.sub(p + r'="\w*"', '', mnf)
+        mnf = re.sub(a, f'{a}\n{p}="true"', mnf)
 
         with open(self.AMX, 'w') as f:
             f.write(mnf)
 
     def inject_logger(self):
-        pass
+        LOG.i('injecting logger...')
+
+        mob = 'ignoramus'
+        cid = 'ignorabimus'
+        yor = lambda x, y: f'\ninvoke-static {{}}, {x}->{y}()V\n'
+        zet = lambda x, y: f'\n.method public static {x}()V\n.registers 1\n{y}\nreturn-void\n.end method'
+        log = '\nsget-object v0, {}\n.line {}\n.local v0, "{}:{}":V\ninvoke-static {{v0}}, Lmob/Logger;->log(Ljava/lang/Object;)V\nsput-object v0, {}'
+        jav = '0x9b42_{}.java'
+        pat = r'.field public static \w+:.+String;'
+        sdir = os.path.join(self.SRC, 'smali')
+        cdir = os.path.join(sdir, 'classes{}')
+        ripentry = 'Application.smali'
+
+        def ld():  # last dex number
+            l = []
+            for i in os.scandir(sdir):
+                l.append(re.sub('[^0-9]*', '', i.name) or 1)
+            return max([int(i) for i in l])
+
+        sml = self.sfiles()
+        LOG.i('mencari string pairip...')
+
+        pai = {}
+        iap = []
+        for i in sml:
+
+            if self.COM in i:
+
+                if i.endswith(ripentry):
+                    ripentry = i
+
+                continue
+
+            with open(i, 'r') as f:
+                s = re.findall(pat, f.read())
+                if s:
+                    pai[i] = s
+                    iap.append(
+                        re.findall(r'.+\bclasses\d*.\w+', i)[0]
+                    )
+
+        iap = set(iap)
+
+        LOG.i(f'memproses {len(pai)} class...')
+
+        alpha = ''
+        x = 0
+        for k, v in pai.items():
+            sf = Smali(k)
+            alpha = alpha + yor(sf.klas, mob)
+            xXx = jav.format(x)
+            inv = ''
+
+            LOG.i(f'menginjeksi logger untuk {len(v)} string di {sf.klas}')
+
+            for n, i in enumerate(v):
+                i = re.sub('.+static ', '', i)
+                u = sf.klas + '->' + i
+                inv = inv + log.format(u, n+1, xXx, n+1, u)
+
+            m = zet(mob, inv)
+
+            sf.append(m)
+            
+            s = '.super ' + sf.zuper
+            t = s + f'\n.source "{xXx}"'
+
+            sf.replace(s, t)
+            sf.write()
+
+            x = x + 1
+
+        beta = Smali(list(pai.keys())[0])
+        beta.append(zet(cid, alpha))
+        beta.write()
+
+        rp = Smali(ripentry)
+        caller = yor(beta.klas, cid)
+        pinit = r'(.method .+<init>(?s:.+?))(return-void(?s:.+?).end method)'
+        pm = re.findall(pinit, rp.content)
+        pm = list(pm[0])
+        print(pm)
+        rp.replace(pinit, pm[0] + caller + pm[1])
+        rp.write()
+
+        LOG.i('objek caller ditambahkan ke', os.path.basename(ripentry))
+
+        mkdir(cdir.format(ld()+1))
+
+        slog = os.path.join(cdir.format(ld()), 'mob')
+        shutil.copytree(os.path.join('assets', 'mob'), slog)
+
+        for i in iap:
+            shutil.move(
+                i, re.sub(r'\bclasses\d*', f'classes{ld()}', i)
+            )
+
+        LOG.d('berhasil menginjeksi logger')
 
     def bypass_checks(self):
-        pass
+        LOG.i('bypass pengecekan integrity dan signature...')
+        
+        f = ','.join(self.sfiles())
+        p = lambda x: f'[^,]*{x}.smali'
+
+        clases = re.findall(p('LicenseClientV3') + '|' + p('SignatureCheck'), f)
+
+        met = r'(.method .+\b{}\b.+{}[\s\S]+?.locals \d+)(?s:.+?)(.end method)'
+        cek = [
+            ('connectToLicensingService', 'V'),
+            ('initializeLicenseCheck', 'V'),
+            ('processResponse', 'V'),
+            ('verifyIntegrity', 'V'),
+            ('verifySignatureMatches', 'Z'),
+        ]
+
+        v = '\nreturn-void\n'
+        z = '\nconst/4 p0, 0x1\nreturn p0\n'
+        rep = lambda x, y: x + (v if r == 'V' else z) + y
+
+        for i in clases:
+            s = Smali(i)
+
+            for n, r in cek:
+                p = met.format(n, r)
+                m = re.findall(p, s.content)
+
+                if m:
+                    LOG.i(f'memodifikasi {os.path.basename(i)}->{n}')
+                    n = rep(*m[0])
+                    s.replace(p, n)
+
+            s.write()
+
+        LOG.d('bypass sukses')
 
     def patch_crc(self):
-        crc_byte = lambda x: x.to_bytes(4, byteorder='little')
+        LOG.i('memalsukan CRC data...')
 
         ori = Apk(self.ORI)
-        mod = Apk(self.ANU)
+        mod = self.SRC + '.apk'
 
-        with open(mod.PATH, 'rb') as f:
-            dat = bytearray(f.read())
+        with ZipFile(mod, 'r') as m:
+            with ZipFile(self.ANU, 'w') as o:
+                for i in m.infolist():
+                    dat = m.read(i.filename)
 
-        for file, mod_crc in mod.CRC.items():
+                    if i.filename in ori.CRC:
+                        i.CRC = ori.CRC[i.filename]
 
-            if file not in ori.CRC: continue
+                    o.writestr(i, dat)
 
-            if mod_crc != ori.CRC[file]:
-                m = crc_byte(mod_crc)
-                n = crc_byte(ori.CRC[file])
-                dat = dat.replace(m, n)
+    def mtd2dict(self, mtd):
+        with open(mtd, 'r') as f:
+            d = re.findall(r'\{.+?\}', f.read())
 
-                LOG.d(f'[PATCHED] {os.path.basename(file)} ({m} => {n})')
+        r = {}
+        for i in d:
+            m = list(re.findall('(".+")\n(".+")', i))
+            r[m[0]] = m[1]
 
-        with open(self.ANU, 'wb') as f:
-            f.write(dat)
+        return r
 
     def pairip_fuck(self):
-        mtd = input('generated mtd file path: ')
-        return mtd
+        mtd = ''
+        while not(mtd and os.path.isfile(mtd)):
+            mtd = input('file .mtd: ')
+
+        LOG.i('google asw...', mtd)
+        #dic = self.mtd2dict(mtd)
+        
+        shutil.copy(self.AMX + '.bak', self.AMX)
+        LOG.d('mengembalikan manifes ke semula')
+
+        # restore pairip strings
+        p = r'const.+(.\d+).+[\n\s]sget.+?(.\d+)'
+
+        # remove pairip invokes
+
+        # other replacements
+
 
 banner = '''
 #######################
  pairip removal script
 #######################
 '''
+
 if __name__ == '__main__':
     print(banner)
     APK = sys.argv[1]
@@ -303,6 +471,10 @@ if __name__ == '__main__':
 
     except Exception as e:
         LOG.e(e)
-        LOG.w('cleaning up...')
+        LOG.w('membersihkan dapur...')
         rmdir(rip.TMP)
         raise
+
+    except KeyboardInterrupt:
+        LOG.e('operasi dibatalkan oleh user')
+        rmdir(rip.TMP)

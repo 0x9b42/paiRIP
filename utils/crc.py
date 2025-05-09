@@ -1,52 +1,79 @@
-import zipfile
 import struct
+from zipfile import ZipFile
 
-def get_crcs(apk_path):
-    """Extract CRCs and metadata from an APK."""
-    crcs = {}
-    with zipfile.ZipFile(apk_path, 'r') as z:
-        for info in z.infolist():
-            crcs[info.filename] = {
-                'crc': info.CRC,
-                'compressed_size': info.compress_size,
-                'uncompressed_size': info.file_size,
-                'compression_method': info.compress_type
-            }
-    return crcs
+def find_eocd(data):
+    # End of Central Directory signature: 0x06054b50
+    return data.rfind(b'\x50\x4b\x05\x06')
 
-def patch_crcs(original_apk, modified_apk, output_apk):
-    """Patch CRCs in modified APK to match original APK."""
-    original_crcs = get_crcs(original_apk)
-    temp_apk = 'temp.apk'
-    
-    # Copy modified APK to temp file
-    with zipfile.ZipFile(modified_apk, 'r') as z_in:
-        with zipfile.ZipFile(temp_apk, 'w', zipfile.ZIP_STORED) as z_out:
-            for info in z_in.infolist():
-                data = z_in.read(info.filename)
-                new_info = zipfile.ZipInfo(info.filename)
-                new_info.compress_type = info.compress_type
-                new_info.file_size = info.file_size
-                new_info.compress_size = info.compress_size
-                # Use original CRC if file exists in original APK
-                if info.filename in original_crcs:
-                    new_info.CRC = original_crcs[info.filename]['crc']
-                else:
-                    new_info.CRC = info.CRC
-                z_out.writestr(new_info, data)
-    
-    # Update central directory CRCs 
-    # (requires low-level ZIP manipulation)
-    with open(temp_apk, 'rb') as f:
-        data = f.read()
-    with open(output_apk, 'wb') as f:
+def read_central_dir_offset(data, eocd_pos):
+    # Central directory offset is at EOCD+16 (4 bytes)
+    return struct.unpack('<I', data[eocd_pos+16:eocd_pos+20])[0]
+
+def crc_faker(mod_apk, ori_apk, out_apk):
+    # 1. Get original CRCs from pristine APK
+    with ZipFile(ori_apk, 'r') as zf:
+        original_crcs = {info.filename: info.CRC for info in zf.infolist()}
+
+    # 2. Load modified APK into memory
+    with open(mod_apk, 'rb') as f:
+        data = bytearray(f.read())
+
+    # 3. Patch LOCAL FILE HEADERS
+    with ZipFile(mod_apk, 'r') as zf:
+        for info in zf.infolist():
+            if info.filename not in original_crcs:
+                continue
+
+            # Local header CRC position: header_offset + 14
+            crc_pos = info.header_offset + 14
+            if crc_pos + 4 > len(data):
+                continue  # Skip invalid entries
+
+            # Write original CRC (little-endian)
+            data[crc_pos:crc_pos+4] = struct.pack(
+                '<I', 
+                original_crcs[info.filename]
+            )
+
+    # 4. Patch CENTRAL DIRECTORY ENTRIES
+    eocd_pos = find_eocd(data)
+    if eocd_pos == -1:
+        raise ValueError("Invalid ZIP/EOCD marker not found")
+
+    central_dir_start = read_central_dir_offset(data, eocd_pos)
+    pos = central_dir_start
+
+    while pos < len(data) - 4:
+        # Central directory entry signature: 0x02014b50
+        if data[pos:pos+4] != b'\x50\x4b\x01\x02':
+            break
+
+        # Filename length (2 bytes at offset 28)
+        name_len = struct.unpack('<H', data[pos+28:pos+30])[0]
+        # Extra field length (2 bytes at offset 30)
+        extra_len = struct.unpack('<H', data[pos+30:pos+32])[0]
+        # File comment length (2 bytes at offset 32)
+        comment_len = struct.unpack('<H', data[pos+32:pos+34])[0]
+
+        # Extract filename
+        name_start = pos + 46
+        name_end = name_start + name_len
+        filename = data[name_start:name_end].decode('utf-8')
+
+        # Patch CRC if file exists in original
+        if filename in original_crcs:
+            # CRC position: pos + 16
+            data[pos+16:pos+20] = struct.pack(
+                '<I', 
+                original_crcs[filename]
+            )
+
+        # Move to next entry
+        entry_size = 46 + name_len + extra_len + comment_len
+        pos += entry_size
+
+    # 5. Write patched APK
+    with open(out_apk, 'wb') as f:
         f.write(data)
-    
-    # Note: This is a simplified version; actual ZIP header manipulation
-    # requires parsing and updating local and central directory headers.
 
-# Example usage
-original_apk = 'original.apk'
-modified_apk = 'modified.apk'
-output_apk = 'patched.apk'
-patch_crcs(original_apk, modified_apk, output_apk)
+    print(f"CRCs faked in {out_apk}. Now re-sign the APK!")

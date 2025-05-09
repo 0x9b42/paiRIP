@@ -133,7 +133,7 @@
     return-object v0
 .end method
 
-.method public static logstring(Ljava/lang/Object;)V
+.method public static log(Ljava/lang/Object;)V
     .registers 9
 
     invoke-static {p0}, Lmob/Logger;->y(Ljava/lang/Object;)Ljava/lang/String;
