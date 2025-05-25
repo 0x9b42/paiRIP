@@ -355,7 +355,6 @@ class Rip:
         pinit = r'(.method .+<init>(?s:.+?))(return-void(?s:.+?).end method)'
         pm = re.findall(pinit, rp.content)
         pm = list(pm[0])
-        print(pm)
         rp.replace(pinit, pm[0] + caller + pm[1])
         rp.write()
 
@@ -473,7 +472,6 @@ if __name__ == '__main__':
         LOG.e(e)
         LOG.w('membersihkan dapur...')
         rmdir(rip.TMP)
-        raise
 
     except KeyboardInterrupt:
         LOG.e('operasi dibatalkan oleh user')
