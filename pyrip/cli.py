@@ -39,18 +39,21 @@ def pairip_smali():
     patt = r'.field public static \w+:.+String;'
 
     alpha = lambda x: f'\n.method public static {x}()V' \
-                       '\n.registers 1\n%s\nreturn-void' \
+                       '\n.registers 2\n%s\nreturn-void' \
                        '\n.end method'
 
     eta = '\nsget-object v0, %s' \
+          '\nconst-string v1, "%s"' \
           '\n.line %d' \
-          '\n.local v0, "%s:%d":V' \
-          '\ninvoke-static {v0}, Lmob/Logger;->x(Ljava/lang/Object;)V' \
+          '\n.local v0, "%s":V' \
+          '\ninvoke-static {v0}, Lmt/Objectlogger;->logstring(Ljava/lang/Object;)V' \
           '\nsput-object v0, %s'
 
     jav = '0x9b42_%d.java'
-    mob = 'ignoramus'
-    tet = 'ignorabimus'
+    #mob = 'ignoramus'
+    mob = 'appkiller'
+    #tet = 'ignorabimus'
+    tet = 'callobjects'
 
     n = 0
     tot = 0
@@ -69,8 +72,9 @@ def pairip_smali():
         line = 1
         for i in file.fields():
             faccess = f'{file.klass}->{i.name}:{i.rtype}'
+            sline = f'{source}:{line}'
             zeta += eta % (
-                faccess, line, source, line, faccess
+                faccess, sline, line, sline, faccess
             )
             line += 1 
 
@@ -156,7 +160,6 @@ def rip():
     bypass_checks()
 
     log.i('Building modified source...')
-    input('enter to build')
     app.build('apps.apk', '-f')
 
     log.w('Cleaning up...')

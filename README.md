@@ -1,6 +1,2 @@
 ## Pairip Removal Tool
-You know what to do lah
-
-this definitely not a virus, desu😺
-
-Coming soon...
+An attempt to replicate amazing script's [pairip_utility.py](t.me/1911893084)

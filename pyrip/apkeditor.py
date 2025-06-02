@@ -137,7 +137,7 @@ class ApkEditor:
         self.decode('-no-dex-debug')
 
         self.manifest = TextFile(self.src / 'AndroidManifest.xml')
-        self.package = self.manifest.find('package=')
+        self.package = self.manifest.find('package=').strip()[9:-1]
         self.classes = self.src / 'smali'
 
     def dexcount(self):
