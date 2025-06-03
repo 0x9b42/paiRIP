@@ -532,7 +532,7 @@
     :try_start_5b
     new-instance v3, Ljava/io/File;
 
-    const-string v4, "/data/data/com.digitalcosmos.shimeji/dictionary"
+    const-string v4, "/data/data/MOBPKAGE/dictionary"
 
     invoke-direct {v3, v4}, Ljava/io/File;-><init>(Ljava/lang/String;)V
 
