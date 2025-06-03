@@ -1,7 +1,6 @@
 from pyrip.utils import log
 from pyrip.apkeditor import ApkEditor, Smali
 from pathlib import Path
-import shutil
 import sys
 
 app = ApkEditor(sys.argv[1])
@@ -31,6 +30,12 @@ def patch_manifest():
     tag = '<application'
     app.manifest.sub(tag, tag + '\n' + legacy + '"true"')
     log.s('Added:', legacy + '"true"')
+
+    app.manifest.rsub('<activity(?s:[^<]+?)pairip.+LicenseActivity(?s:.+?)>', '')
+    log.s('Removed pairip LicenseActivity')
+
+    app.manifest.rsub('<provider(?s:[^<]+?)pairip.+LicenseContentProvider(?s:.+?)>', '')
+    log.s('Removed pairip LicenseContentProvider')
 
     app.manifest.write()
 
@@ -110,9 +115,13 @@ def pairip_smali():
 
 
 def bypass_checks():
-    v3 = Smali(list(app.classes.glob(
-        '*/com/pairip/**/LicenseClientV3.smali'
-    ))[0])
+    v3 = app.classes.glob('*/com/pairip/**/LicenseClientV3.smali')
+
+    if not list(v3):
+        v3 = app.classes.glob('*/com/pairip/**/LicenseClient.smali')
+
+    v3 = Smali(list(v3)[0])
+
     c3 = Smali(list(app.classes.glob(
         '*/com/pairip/**/SignatureCheck.smali'
     ))[0])
