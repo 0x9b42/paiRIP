@@ -39,12 +39,17 @@ class TextFile(Path):
                 yield line
 
     def find(self, txt):
-        for line in self.text.splitlines():
-            if txt in line:
-                return line
+        for i in self.findall(txt):
+            return i
+        return ''
 
-    def finditer(self, pat):
+    def rfindall(self, pat):
         return re.finditer(pat, self.text)
+
+    def rfind(self, pat):
+        for i in self.rfindall(pat):
+            return i
+        return ''
 
     def sub(self, old, new):
         self.text = self.text.replace(old, new)
@@ -159,7 +164,7 @@ class ApkEditor:
                     f = TextFile(file)
 
                 found = False
-                for i in f.finditer(patt):
+                for i in f.rfindall(patt):
                     if i: found = True
                     break
 

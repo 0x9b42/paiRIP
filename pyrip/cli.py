@@ -43,16 +43,22 @@ def patch_manifest():
 def pairip_smali():
     patt = r'.field public static \w+:.+String;'
 
-    alpha = lambda x: f'\n.method public static {x}()V' \
-                       '\n.registers 2\n%s\nreturn-void' \
-                       '\n.end method'
+    alpha = '\n'.join([
+        '.method public static %s()V',
+        '\t.registers 2',
+        '\t%s',
+        '\treturn-void',
+        '.end method'
+    ])
 
-    eta = '\nsget-object v0, %s' \
-          '\nconst-string v1, "%s"' \
-          '\n.line %d' \
-          '\n.local v0, "%s":V' \
-          '\ninvoke-static {v0}, Lmt/Objectlogger;->logstring(Ljava/lang/Object;)V' \
-          '\nsput-object v0, %s'
+    eta = '\n\t'.join([
+        'sget-object v0, %s',
+        'const-string v1, "%s"',
+        '.line %d',
+        '.local v0, "%s":V',
+        'invoke-static {v0}, Lmt/Objectlogger;->logstring(Ljava/lang/Object;)V',
+        'sput-object v0, %s'
+    ])
 
     jav = '0x9b42_%d.java'
     #mob = 'ignoramus'
@@ -63,43 +69,52 @@ def pairip_smali():
     n = 0
     tot = 0
     beta = ''
+
     for file in app.search(patt, root = app.classes):
         if file.find('.method '):
             continue
 
+        file = Smali(file)
+
         source = jav % n
         file.prepend(f'.source "{source}"\n')
-        n += 1
 
         log.i('Injecting logger at', file.klass)
 
         zeta = ''
         line = 1
+
         for i in file.fields():
             faccess = f'{file.klass}->{i.name}:{i.rtype}'
             sline = f'{source}:{line}'
-            zeta += eta % (
-                faccess, sline, line, sline, faccess
-            )
+            zeta += eta % (faccess, sline, line, sline, faccess)
             line += 1 
 
         tot += line - 1
-        beta += '\ninvoke-static {}, %s->%s()V' % (file.klass, mob)
+        beta += '\n\tinvoke-static {}, %s->%s()V' % (file.klass, mob)
 
-        file.append(alpha(mob) % zeta)
+        file.append(alpha % (mob, zeta))
         file.write()
+        n += 1
 
     log.s(f'Processed {tot} pairip strings in {n} classes')
 
-    entry = list(
-        app.classes.glob('*/com/pairip/application/Application.smali')
-    )[0]
-    entry = Smali(str(entry))
-    entry.append(alpha(tet) % beta)
+    entry = None
+
+    for i in app.classes.glob('*/com/pairip/application/Application.smali'):
+        entry = Smali(i)
+        break
+
+    if not entry:
+        log.e('Application.smali not found')
+        raise
+
+    entry.append(alpha % (tet, beta))
 
     pinit = r'(?s)(\.method\s.+<init>\(.+?)[\n\s]+return-void'
-    for i in entry.finditer(pinit):
-        new = '\ninvoke-static {}, %s->%s()V' % (entry.klass, tet)
+
+    for i in entry.rfindall(pinit):
+        new = '\n\tinvoke-static {}, %s->%s()V' % (entry.klass, tet)
         entry.sub(i.group(1), i.group(1) + new)
         break
 
@@ -108,6 +123,7 @@ def pairip_smali():
 
     lg = Smali('assets/mt/Objectlogger.smali')
     lg.sub('MOBPKAGE', app.package)
+
     logger = app.classes / f'classes{app.dexcount() + 1}' / 'mt' / 'Objectlogger.smali'
     logger.parent.mkdir(parents=True)
     logger.write_text(lg.text)
@@ -115,16 +131,25 @@ def pairip_smali():
 
 
 def bypass_checks():
-    v3 = app.classes.glob('*/com/pairip/**/LicenseClientV3.smali')
+    v3 = None
+    c3 = None
 
-    if not list(v3):
-        v3 = app.classes.glob('*/com/pairip/**/LicenseClient.smali')
+    for i in app.classes.glob('*/com/pairip/**/LicenseClientV3.smali'):
+        v3 = str(i)
+        break
 
-    v3 = Smali(list(v3)[0])
+    if not v3:
+        for i in app.classes.glob('*/com/pairip/**/LicenseClient.smali'):
+            v3 = str(i)
+            break
 
-    c3 = Smali(list(app.classes.glob(
-        '*/com/pairip/**/SignatureCheck.smali'
-    ))[0])
+    v3 = Smali(v3)
+
+    for i in app.classes.glob('*/com/pairip/**/SignatureCheck.smali'):
+        c3 = str(i)
+        break
+
+    c3 = Smali(c3)
 
     cek = [
         'connectToLicensingService',
@@ -135,27 +160,30 @@ def bypass_checks():
     ]
     
     def mclear(x):
-        m = lambda y: f'.method {x.mod} {x.name}({x.param}){x.rtype}' \
-                      f'\n.{x.reg} {x.regcount}' \
-                      f'\n{y}\n.end method'
+        m = '\n'.join([
+            '.method %s %s(%s)%s' % (x.mod, x.name, x.param, x.rtype),
+            '\t.%s %s' % (x.reg, x.regcount),
+            '\t%s',
+            '.end method'
+        ])
 
         if x.rtype == 'V':
-            return m('return-void')
+            return m % 'return-void'
         else:
-            return m('const/4 p0, 0x1\nreturn p0')
+            return m % 'const/4 p0, 0x1\n\treturn p0'
+
+    p = r'\.method\s.+?%s\((?s:.+?)\.end method'
 
     for x in [v3, c3]:
         for y in x.methods():
             if y.name in cek:
-                new = mclear(y)
-                x.rsub(rf'\.method .+?{y.name}\((?s:.+?)\.end method', new)
+                x.rsub(p % y.name, mclear(y))
                 log.s('Bypassed:', y.name)
 
         x.write()
 
 
 def rip():
-
     log.i('Starting...')
     app.edit()
 
